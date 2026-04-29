@@ -65,8 +65,9 @@ class FlowerDataset(Dataset):
 
 # 数据预处理
 channels = 3
-rows = 224
-cols = 224
+size = 336
+rows = size
+cols = size
 
 def prep_image(img_paths, y_raw):
     unique_labels = np.unique(y_raw)
@@ -77,7 +78,7 @@ def prep_image(img_paths, y_raw):
 
     idx_to_label = {idx: int(label) for idx, label in enumerate(unique_labels_sorted)}
     mapping_dict = {'label_to_idx': label_to_idx, 'idx_to_label': idx_to_label}
-    with open('../model/config.json', 'w') as f:
+    with open('label_mapping.json', 'w') as f:
         json.dump(mapping_dict, f, indent=4)
     print(f"映射保存完成，num_classes: {num_classes}")
 
@@ -93,8 +94,10 @@ def prep_image(img_paths, y_raw):
         if i % 1000 == 0:
             print(f'Processed {i} of {len(img_paths)}')
 
+    print(f'Processed {len(img_paths)} of {len(img_paths)}')
     data = data.astype(np.float32) / 255.0
     return data, y_idx, idx_to_label, num_classes
+
 
 def prep_test_image(img_paths):
     data = np.empty((len(img_paths), channels, rows, cols), dtype=np.uint8)
@@ -108,25 +111,105 @@ def prep_test_image(img_paths):
         data[i] = np.transpose(img, (2, 0, 1))  # (H,W,C) -> (C,H,W)
         if i % 1000 == 0:
             print(f'Processed {i}/{len(img_paths)} images...')
+    print(f'Processed {len(img_paths)} of {len(img_paths)}')
     data = data.astype(np.float32) / 255.0
     return data
 
 
 train_transform = transforms.Compose([
     transforms.RandomRotation(degrees=90),
-    transforms.RandomResizedCrop(size=224, scale=(0.95, 1.05), ratio=(0.8, 1.2)),
-    transforms.ColorJitter(brightness=0.1, contrast=0.05, saturation=0.05, hue=0.05),
-    transforms.RandomHorizontalFlip(p=0.2),
-    transforms.RandomVerticalFlip(p=0.2),
+    transforms.RandomResizedCrop(size=size, scale=(0.95, 1.05), ratio=(0.8, 1.2)),
+    transforms.ColorJitter(brightness=0.2, contrast=0.05, saturation=0.05, hue=0.05),
+    transforms.RandomHorizontalFlip(p=0.5),
+    transforms.RandomVerticalFlip(p=0.5),
+    transforms.RandomGrayscale(p=0.1),
     transforms.ToTensor(),
-    GridMask(prob=0.5),
-    transforms.RandomErasing(p=0.5, scale=(0.02, 0.15), ratio=(0.3, 3.3), value='random'),
+    GridMask(prob=0.75),
+    transforms.RandomErasing(p=0.75, scale=(0.02, 0.15), ratio=(0.3, 3.3), value='random'),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
 
 val_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.CenterCrop(224),
+    transforms.Resize((size, size)),
+    transforms.CenterCrop(size),
     transforms.ToTensor(),
     transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
 ])
+def load_TTA():
+    tta_transforms = [
+        # 1. 原始图片 (中心裁剪)
+        transforms.Compose([
+            transforms.Resize((336, 336)),
+            transforms.CenterCrop(336),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+
+        # 2. 水平翻转
+        transforms.Compose([
+            transforms.Resize((336, 336)),
+            transforms.CenterCrop(336),
+            transforms.RandomHorizontalFlip(p=1.0),  # 必定翻转
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+
+        # 3. 左上角裁剪
+        transforms.Compose([
+            transforms.Resize((350, 350)),
+            transforms.Lambda(lambda img: transforms.functional.crop(img, 0, 0, 336, 336)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+
+        # 4. 右下角裁剪
+        transforms.Compose([
+            transforms.Resize((350, 350)),
+            transforms.Lambda(lambda img: transforms.functional.crop(img, 14, 14, 336, 336)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+
+        # 5. 轻微旋转
+        transforms.Compose([
+            transforms.Resize((350, 350)),
+            transforms.CenterCrop(336),
+            transforms.RandomRotation(degrees=(-10, 10)),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+        # 6. 垂直翻转
+        transforms.Compose([
+            transforms.Resize((336, 336)),
+            transforms.CenterCrop(336),
+            transforms.RandomVerticalFlip(p=1.0),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+
+        # 7. 中心放大裁剪
+        transforms.Compose([
+            transforms.Resize((380, 380)),
+            transforms.CenterCrop(336),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+
+        # 8. 轻微亮度调整
+        transforms.Compose([
+            transforms.Resize((336, 336)),
+            transforms.CenterCrop(336),
+            transforms.ColorJitter(brightness=0.2),
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+
+        # 9. 多尺度预测
+        transforms.Compose([
+            transforms.Resize((320, 320)),
+            transforms.Resize((336, 336)),  # 缩放到统一尺寸
+            transforms.ToTensor(),
+            transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
+        ]),
+    ]
+    return tta_transforms

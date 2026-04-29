@@ -6,7 +6,7 @@ from sklearn.ensemble import RandomForestClassifier
 from sklearn.linear_model import LogisticRegression
 import torch.nn.functional as F
 
-from CutMix import CutMix, mixup_criterion
+
 import pandas as pd
 import numpy as np
 import os
