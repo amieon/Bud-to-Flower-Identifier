@@ -1,31 +1,24 @@
 import pickle
 import sys
+import time
 
 import torch
 import torch.nn.functional as F
 import numpy as np
+import numpy
 import pandas as pd
 import os
-from torch.utils.data import DataLoader
+from PIL import Image
 from torchvision import transforms
 from model import load_convnext, load_efficientnet, load_swin
-from utils import prep_test_image, FlowerDataset
+from utils import load_TTA, load_TTA_1
 
-# 设备检查
+# ==================== 配置 ====================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-print(f"Device: {device}")
-
-folder_path = "../results"
-
-os.makedirs(folder_path, exist_ok=True)
-
-# 参数检查
-if len(sys.argv) != 3:
-    print("Usage: python predict.py <test_folder_path> <output_csv_path>")
-    sys.exit(1)
-
-test_folder_path = sys.argv[1]
-output_csv_path = sys.argv[2]
+print(f"🖥️  Device: {device}")
+start_time = time.time()
+# TTA 配置
+USE_TTA = True  # 是否使用 TTA
 
 # 加载标签映射
 import json
@@ -36,7 +29,7 @@ idx_to_label = {int(k): int(v) for k, v in mapping['idx_to_label'].items()}
 num_classes = len(idx_to_label)
 
 # 测试集路径
-test_folder_path = test_folder_path
+test_folder_path = sys.argv[1]
 valid_exts = ('.jpg', '.jpeg', '.png', '.bmp')
 test_filenames = [
     os.path.join(test_folder_path, f)
@@ -44,92 +37,136 @@ test_filenames = [
     if f.lower().endswith(valid_exts)
 ]
 img_names = [os.path.basename(p) for p in test_filenames]
+print(f"📸 找到 {len(test_filenames)} 张测试图片")
 
-print(f"找到 {len(test_filenames)} 张测试图片")
-
-# 预处理测试集
-test_data = prep_test_image(test_filenames)
-
-test_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.CenterCrop(224),
+# ==================== TTA 变换定义 ====================
+# 基础变换（必需）
+base_transform = transforms.Compose([
+    transforms.Resize((336, 336)),
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
 ])
 
-test_dataset = FlowerDataset(test_data, y=None, transform=test_transform)
-test_loader = DataLoader(test_dataset, batch_size=48, shuffle=False)
+# TTA 变换列表
+tta_transforms, TTA_NUM_AUGMENTS = load_TTA_1()
 
-# ==================== 加载模型 ====================
-model_loaders = [load_efficientnet, load_convnext, load_swin]
-model_names = ['EfficientNet.pth', 'ConvNeXt.pth', 'best_model.pth']
+# 根据配置选择使用的变换
+if USE_TTA:
+    selected_transforms = tta_transforms[:TTA_NUM_AUGMENTS]
+    print(f"\n✨ TTA 已启用: 每张图片将进行 {len(selected_transforms)} 次增强")
+else:
+    selected_transforms = [tta_transforms[0]]  # 只用中心裁剪
+    print(f"\n⚠️  TTA 未启用: 使用标准预测")
 
-# ==================== 预测测试集 ====================
-print("\n预测测试集...")
+# ==================== 加载基模型 ====================
+print("\n📦 加载基模型...")
+model_names = ['ConvNeXt', 'Swin']
+base_models = []
 
-# 存储所有模型的测试集预测
-# Shape: (n_models, n_test_samples, n_classes)
-all_test_predictions = []
+for model_name in model_names:
+    print(f"  加载 {model_name}...")
 
-for model_idx, (loader_func, model_name) in enumerate(zip(model_loaders, model_names)):
+    # 创建模型
+    if model_name == 'ConvNeXt':
+        model, _, _, _ = load_convnext(num_classes=num_classes, device=device)
+    elif model_name == 'Swin':
+        model, _, _, _ = load_swin(num_classes=num_classes, device=device)
 
-
-    # 加载模型
-    model, _, _, _ = loader_func(num_classes=num_classes, device=device)
-    model.load_state_dict(torch.load("../model/" + model_names[model_idx], weights_only=True))
+    # 加载权重
+    model_path = f'../model/best_{model_name}.pth'
+    model.load_state_dict(torch.load(model_path, weights_only=True))
     model.eval()
 
-    # 预测
-    predictions = []
-    with torch.no_grad():
-        for inputs in test_loader:
-            inputs = inputs.to(device)
-            outputs = model(inputs)
-            probs = F.softmax(outputs, dim=1)
-            predictions.append(probs.cpu().numpy())
+    base_models.append(model)
+    print(f"    ✅ {model_name} 加载完成")
 
-    predictions = np.concatenate(predictions, axis=0)
-
-    all_test_predictions.append(predictions)
-
-    print(f"  {model_name} 预测完成")
-
-# 转换为 numpy 数组
-all_test_predictions = np.array(all_test_predictions)
-
-# ==================== 使用 Meta Model ====================
-print("\n使用 Meta Model 进行最终预测...")
-
+# ==================== 加载 Meta 模型 ====================
+print("\n🔮 加载 Meta 模型...")
 with open('../model/meta_model.pkl', 'rb') as f:
     meta_model = pickle.load(f)
+print(f"  ✅ Meta 模型加载完成 (类型: {type(meta_model).__name__})")
 
-# 拼接特征
+# ==================== 第一阶段：基模型预测（带 TTA）====================
+print(f"\n🎯 第一阶段：使用基模型生成预测概率...")
+
+all_base_predictions = []  # 存储所有基模型的预测
+
+for idx, model in enumerate(base_models):
+    model_name = model_names[idx]
+    print(f"\n[{idx + 1}/{len(base_models)}] {model_name} 预测中...")
+
+    probabilities = []
+
+    with torch.no_grad():
+        for i, img_path in enumerate(test_filenames):
+            # 加载图片
+            img = Image.open(img_path).convert('RGB')
+
+            # TTA: 对同一张图片进行多次增强预测
+            tta_probs = []
+            for transform in selected_transforms:
+                img_tensor = transform(img).unsqueeze(0).to(device)
+                output = model(img_tensor)
+                probs = F.softmax(output, dim=1)
+                tta_probs.append(probs.cpu().numpy()[0])
+
+            # 平均所有 TTA 预测
+            avg_probs = np.mean(tta_probs, axis=0)
+            probabilities.append(avg_probs)
+
+            # 进度显示
+            if (i + 1) % 500 == 0:
+                print(f"    进度: {i + 1}/{len(test_filenames)}")
+
+    all_base_predictions.append(np.array(probabilities))
+    print(f"  ✅ {model_name} 预测完成")
+
+# ==================== 拼接特征 ====================
+print("\n🔧 拼接基模型预测为特征矩阵...")
 # Shape: (n_test_samples, n_models * n_classes)
-meta_test_features = all_test_predictions.transpose(1, 0, 2).reshape(len(test_filenames), -1)
-print(f"测试集 Meta 特征形状: {meta_test_features.shape}")
+test_features = np.concatenate(all_base_predictions, axis=1)
+print(f"  特征矩阵形状: {test_features.shape}")
+print(f"  - 样本数: {test_features.shape[0]}")
+print(f"  - 特征数: {test_features.shape[1]} = {len(base_models)} 模型 × {num_classes} 类")
 
-# 预测
-final_predictions = meta_model.predict(meta_test_features)
+# ==================== 第二阶段：Meta 模型预测 ====================
+print(f"\n🚀 第二阶段：使用 Meta 模型进行最终预测...")
 
-try:
-    final_probabilities = meta_model.predict_proba(meta_test_features)
-    final_confidences = np.max(final_probabilities, axis=1)
-except:
-    avg_probs = np.mean(all_test_predictions, axis=0)
-    final_confidences = np.max(avg_probs, axis=1)
+# Meta 模型预测
+meta_predictions = meta_model.predict(test_features)  # 预测类别
+meta_probabilities = meta_model.predict_proba(test_features)  # 预测概率
+
+# 获取每个预测的置信度（最大概率）
+pred_confidences = np.max(meta_probabilities, axis=1)
 
 # 转换为原始标签
-final_labels = [idx_to_label[int(idx)] for idx in final_predictions]
+final_labels = [idx_to_label[int(pred)] for pred in meta_predictions]
+
+print(f"  ✅ Meta 模型预测完成")
+print(f"  平均置信度: {pred_confidences.mean():.4f}")
+print(f"  最低置信度: {pred_confidences.min():.4f}")
+print(f"  最高置信度: {pred_confidences.max():.4f}")
 
 # ==================== 保存结果 ====================
-print("\n保存结果...")
+print("\n💾 保存预测结果...")
 
-# Stacking 结果
-submission_stacking = pd.DataFrame({
+submission = pd.DataFrame({
     "img_name": img_names,
     "predicted_class": final_labels,
-    "confidence": [f"{c:.4f}" for c in final_confidences]
+    "confidence": [f"{c:.4f}" for c in pred_confidences]
 })
-output_csv = output_csv_path
-submission_stacking.to_csv(output_csv, index=False)
-print(f"  Stacking 结果: {output_csv}")
+
+output_csv = sys.argv[2]
+submission.to_csv(output_csv, index=False)
+print(f"  ✅ 预测结果已保存: {output_csv}")
+
+# ==================== 统计信息 ====================
+print("\n📊 预测统计:")
+print(f"  总样本数: {len(final_labels)}")
+print(f"  预测类别数: {len(set(final_labels))}")
+print(f"  TTA 状态: {'✅ 已启用 (' + str(len(selected_transforms)) + ' 次增强)' if USE_TTA else '❌ 未启用'}")
+
+print("\n🎉 Stacking + TTA 预测完成！")
+
+elapsed_time = time.time() - start_time
+print(f"\n⏱️  总用时: {elapsed_time:.2f} 秒 ({elapsed_time/60:.2f} 分钟)")
