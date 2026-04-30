@@ -5,8 +5,7 @@ from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingWarmRestarts, CosineAnnealingLR, ConstantLR, SequentialLR
 
 
-def create_multi_stage_scheduler_v1(optimizer, total_epochs=150):
-
+def create_scheduler(optimizer):
     return CosineAnnealingWarmRestarts(
         optimizer,
         T_0=50,
