@@ -52,7 +52,7 @@ def load_convnext(num_classes, device):
         betas=(0.9, 0.999)
     )
 
-    scheduler = create_multi_stage_scheduler_v1(optimizer, 70)
+    scheduler = create_scheduler(optimizer)
     criterion = nn.CrossEntropyLoss(label_smoothing=0.05)
     return model, optimizer, criterion, scheduler
 
@@ -88,7 +88,7 @@ def load_efficientnet(num_classes, device):
         betas=(0.9, 0.999)
     )
 
-    scheduler = create_multi_stage_scheduler_v1(optimizer, 70)
+    scheduler = create_scheduler(optimizer)
     criterion = nn.CrossEntropyLoss(label_smoothing=0.03)
     return model, optimizer, criterion, scheduler
 
