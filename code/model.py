@@ -3,11 +3,11 @@ from torch import nn
 from torch.optim import AdamW
 
 
-def cool3(model):
-    if isinstance(model, torch.nn.Module):  # 通用冻结逻辑
-        for name, param in model.named_parameters():
-            if 'features.0' in name or 'features.1' in name or 'features.3' in name:
-                param.requires_grad = False
+# def cool3(model):
+#     if isinstance(model, torch.nn.Module):  # 通用冻结逻辑
+#         for name, param in model.named_parameters():
+#             if 'features.0' in name or 'features.1' in name or 'features.3' in name:
+#                 param.requires_grad = False
 
 
 def load_convnext(num_classes, device):
