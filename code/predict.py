@@ -11,7 +11,7 @@ import os
 from PIL import Image
 from torchvision import transforms
 from model import load_convnext, load_efficientnet, load_swin
-from utils import load_TTA, load_TTA_1
+from utils import load_TTA
 
 # ==================== 配置 ====================
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -42,13 +42,13 @@ print(f"📸 找到 {len(test_filenames)} 张测试图片")
 # ==================== TTA 变换定义 ====================
 # 基础变换（必需）
 base_transform = transforms.Compose([
-    transforms.Resize((224, 224)),
+    transforms.Resize((336, 336)),
     transforms.ToTensor(),
     transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
 ])
 
 # TTA 变换列表
-tta_transforms, TTA_NUM_AUGMENTS = load_TTA_1()
+tta_transforms, TTA_NUM_AUGMENTS = load_TTA()
 
 # 根据配置选择使用的变换
 if USE_TTA:
