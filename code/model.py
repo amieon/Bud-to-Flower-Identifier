@@ -59,10 +59,10 @@ def load_convnext(num_classes, device):
 
 def load_efficientnet(num_classes, device):
     """加载 EfficientNet"""
-    from torchvision.models import efficientnet_b4, EfficientNet_B4_Weights
+    from torchvision.models import efficientnet_b6, EfficientNet_B6_Weights
 
     print("  加载 EfficientNet...")
-    model = efficientnet_b4(weights=EfficientNet_B4_Weights.IMAGENET1K_V1)
+    model = efficientnet_b6(weights=EfficientNet_B6_Weights.IMAGENET1K_V1)
 
     cool3(model)
 
