@@ -1,24 +1,15 @@
 import datetime
-import pickle
 import sys
 
-from sklearn.ensemble import RandomForestClassifier
-from sklearn.linear_model import LogisticRegression
-import torch.nn.functional as F
-
-
+from CutMix import CutMix, mixup_criterion
 import pandas as pd
 import numpy as np
 import os
 import torch
 from sklearn.model_selection import train_test_split
 from torch.utils.data import DataLoader
-from torchvision import transforms
 
-import xgboost as xgb
-
-from meta import meta
-from model import load_convnext, load_efficientnet, load_swin
+from model import load_convnext, load_swin, load_efficientnet
 from utils import prep_image, FlowerDataset, LossHistory, train_transform, val_transform
 
 
@@ -47,8 +38,8 @@ if __name__ == '__main__':
     print(f"{'✅ GPU ready:' if torch.cuda.is_available() else '❌ No GPU detected.'} {torch.cuda.get_device_name(0) if torch.cuda.is_available() else ''}")
 
     # 数据路径
-    csv_path = 'data/train_labels.csv'
-    image_dir = 'data/train'
+    csv_path = '../data/train_labels.csv'
+    image_dir = '../data/train'
 
     # 加载CSV
     df = pd.read_csv(csv_path)
@@ -65,7 +56,7 @@ if __name__ == '__main__':
 
 
     # 数据拆分
-    x_train, x_valid, y_train, y_valid = train_test_split(data, y_idx, random_state=1, test_size=0.2, stratify=y_idx)
+    x_train, x_valid, y_train, y_valid = train_test_split(data, y_idx, random_state=2, test_size=0.2, stratify=y_idx)
 
 
     test_transform = val_transform
@@ -102,7 +93,7 @@ if __name__ == '__main__':
         model, optimizer, criterion, scheduler = loader(num_classes=len(np.unique(y_idx)), device=device)
 
         history = LossHistory()
-        early_stopping = 100
+        early_stopping = 10000000
         best_val_acc = float(0)
         best_val_loss = float('inf')
         early_stop_counter = 0
@@ -185,28 +176,19 @@ if __name__ == '__main__':
             if val_acc > best_val_acc:
                 best_val_acc = val_acc
                 early_stop_counter = 0
-                torch.save(model.state_dict(), f'{model_names[idx]}.pth')
+                torch.save(model.state_dict(), f'best_{model_names[idx]}.pth')
             else:
                 early_stop_counter += 1
                 if early_stop_counter >= early_stopping:
                     print(f'模型 {idx + 1} Early stopping at epoch {epoch + 1}')
-                    torch.save(model.state_dict(), f'best_model_{idx}.pth')
+                    torch.save(model.state_dict(), f'best_{model_names[idx]}.pth')
                     break
 
-            if val_loss < best_val_loss:
-                best_val_acc = val_loss
-                torch.save(model.state_dict(), f'{model_names[idx]}_loss.pth')
+
 
         ensemble_models.append(model)
 
 
-
-    x_train, x_valid, y_train, y_valid = train_test_split(data, y_idx, random_state=2, test_size=0.2, stratify=y_idx)
-    val_dataset = FlowerDataset(x_valid, y_valid, transform=val_transform)
-    val_loader = DataLoader(val_dataset, batch_size=batch_size, shuffle=False)
-
-
-    best_meta_model, best_meta_name = meta(ensemble_models, model_names, val_loader, num_classes, device)
 
 
 
