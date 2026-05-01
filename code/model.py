@@ -89,7 +89,7 @@ def load_efficientnet(num_classes, device):
     )
 
     scheduler = create_scheduler(optimizer)
-    criterion = nn.CrossEntropyLoss(label_smoothing=0.03)
+    criterion = nn.CrossEntropyLoss( label_smoothing=0.03)
     return model, optimizer, criterion, scheduler
 
 
