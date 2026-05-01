@@ -1,0 +1,8 @@
+numpy
+pandas
+scikit-learn
+xgboost
+torch
+torchvision
+opencv-python
+pillow
