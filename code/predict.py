@@ -5,7 +5,6 @@ import time
 import torch
 import torch.nn.functional as F
 import numpy as np
-import numpy
 import pandas as pd
 import os
 from PIL import Image
@@ -17,8 +16,9 @@ from utils import load_TTA
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 print(f"🖥️  Device: {device}")
 start_time = time.time()
+
 # TTA 配置
-USE_TTA = True  # 是否使用 TTA
+USE_TTA = True
 
 # 加载标签映射
 import json
@@ -40,14 +40,6 @@ img_names = [os.path.basename(p) for p in test_filenames]
 print(f"📸 找到 {len(test_filenames)} 张测试图片")
 
 # ==================== TTA 变换定义 ====================
-# 基础变换（必需）
-base_transform = transforms.Compose([
-    transforms.Resize((336, 336)),
-    transforms.ToTensor(),
-    transforms.Normalize([0.485, 0.456, 0.406], [0.229, 0.224, 0.225]),
-])
-
-# TTA 变换列表
 tta_transforms, TTA_NUM_AUGMENTS = load_TTA()
 
 # 根据配置选择使用的变换
@@ -80,14 +72,8 @@ for model_name in model_names:
     base_models.append(model)
     print(f"    ✅ {model_name} 加载完成")
 
-# ==================== 加载 Meta 模型 ====================
-print("\n🔮 加载 Meta 模型...")
-with open('../model/meta_model.pkl', 'rb') as f:
-    meta_model = pickle.load(f)
-print(f"  ✅ Meta 模型加载完成 (类型: {type(meta_model).__name__})")
-
-# ==================== 第一阶段：基模型预测（带 TTA）====================
-print(f"\n🎯 第一阶段：使用基模型生成预测概率...")
+# ==================== 基模型预测（带 TTA）====================
+print(f"\n🎯 使用 {len(base_models)} 个基模型生成预测概率...")
 
 all_base_predictions = []  # 存储所有基模型的预测
 
@@ -121,28 +107,27 @@ for idx, model in enumerate(base_models):
     all_base_predictions.append(np.array(probabilities))
     print(f"  ✅ {model_name} 预测完成")
 
-# ==================== 拼接特征 ====================
-print("\n🔧 拼接基模型预测为特征矩阵...")
-# Shape: (n_test_samples, n_models * n_classes)
-test_features = np.concatenate(all_base_predictions, axis=1)
-print(f"  特征矩阵形状: {test_features.shape}")
-print(f"  - 样本数: {test_features.shape[0]}")
-print(f"  - 特征数: {test_features.shape[1]} = {len(base_models)} 模型 × {num_classes} 类")
+# ==================== 简单平均集成 ====================
+print("\n🔧 对 {} 个模型的预测进行简单平均...".format(len(base_models)))
 
-# ==================== 第二阶段：Meta 模型预测 ====================
-print(f"\n🚀 第二阶段：使用 Meta 模型进行最终预测...")
+# 将所有基模型的预测堆叠起来
+# Shape: (n_models, n_samples, n_classes)
+stacked_predictions = np.stack(all_base_predictions, axis=0)
+print(f"  堆叠形状: {stacked_predictions.shape}")
 
-# Meta 模型预测
-meta_predictions = meta_model.predict(test_features)  # 预测类别
-meta_probabilities = meta_model.predict_proba(test_features)  # 预测概率
+# 对所有模型取平均
+# Shape: (n_samples, n_classes)
+averaged_probabilities = np.mean(stacked_predictions, axis=0)
+print(f"  平均后形状: {averaged_probabilities.shape}")
 
-# 获取每个预测的置信度（最大概率）
-pred_confidences = np.max(meta_probabilities, axis=1)
+# 获取最终预测
+meta_predictions = np.argmax(averaged_probabilities, axis=1)
+pred_confidences = np.max(averaged_probabilities, axis=1)
 
 # 转换为原始标签
 final_labels = [idx_to_label[int(pred)] for pred in meta_predictions]
 
-print(f"  ✅ Meta 模型预测完成")
+print(f"  ✅ 简单平均完成")
 print(f"  平均置信度: {pred_confidences.mean():.4f}")
 print(f"  最低置信度: {pred_confidences.min():.4f}")
 print(f"  最高置信度: {pred_confidences.max():.4f}")
@@ -164,9 +149,10 @@ print(f"  ✅ 预测结果已保存: {output_csv}")
 print("\n📊 预测统计:")
 print(f"  总样本数: {len(final_labels)}")
 print(f"  预测类别数: {len(set(final_labels))}")
+print(f"  集成方法: 简单平均 ({len(base_models)} 个模型)")
 print(f"  TTA 状态: {'✅ 已启用 (' + str(len(selected_transforms)) + ' 次增强)' if USE_TTA else '❌ 未启用'}")
 
-print("\n🎉 Stacking + TTA 预测完成！")
+print("\n🎉 简单平均集成预测完成！")
 
 elapsed_time = time.time() - start_time
 print(f"\n⏱️  总用时: {elapsed_time:.2f} 秒 ({elapsed_time/60:.2f} 分钟)")
